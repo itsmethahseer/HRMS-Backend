@@ -10,7 +10,19 @@ from app.modules.auth import schemas
 from app.core import security
 from app.core.config import settings
 
+from app.core.dependencies import get_current_user, get_tenant_db_from_token
+from app.modules.core_hr import schemas as core_schemas
+
 router = APIRouter()
+
+@router.get("/me", response_model=core_schemas.User, summary="Get currently logged-in user")
+async def get_me(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_tenant_db_from_token)
+):
+    """Returns the currently authenticated user's data."""
+    return current_user
+
 
 @router.post("/login", response_model=schemas.Token)
 async def login(credentials: schemas.LoginRequest, db: AsyncSession = Depends(get_db)):
@@ -36,15 +48,25 @@ async def login(credentials: schemas.LoginRequest, db: AsyncSession = Depends(ge
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-    # 4. Generate JWT Token containing both User ID and Schema Name
+    # 4. Generate JWT Token containing both User ID, Schema Name, and role
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = security.create_access_token(
-        data={"sub": str(user.id), "schema_name": tenant.schema_name},
+        data={
+            "sub": str(user.id),
+            "schema_name": tenant.schema_name,
+            "is_superuser": user.is_superuser,
+            "email": user.email,
+        },
         expires_delta=access_token_expires
     )
-    
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "schema_name": tenant.schema_name
+        "schema_name": tenant.schema_name,
+        "user_id": user.id,
+        "email": user.email,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "is_superuser": user.is_superuser,
     }

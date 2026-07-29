@@ -8,7 +8,9 @@ from app.db.session import get_db, engine
 from app.db.public_models import Tenant
 from app.modules.tenant import schemas
 from app.modules.core_hr.models import Base as CoreBase, User
+import app.modules.employee_profile.models  # noqa: F401 — registers models onto CoreBase metadata
 from passlib.context import CryptContext
+
 
 router = APIRouter()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

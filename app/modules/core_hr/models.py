@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.session import Base
 
+
 class Department(Base):
     __tablename__ = "departments"
 
@@ -33,3 +34,10 @@ class User(Base):
 
     # Relationships
     department = relationship("Department", back_populates="employees")
+    profile = relationship(
+        "EmployeeProfile",
+        back_populates="user",
+        foreign_keys="EmployeeProfile.user_id",
+        uselist=False,
+        cascade="all, delete-orphan"
+    )

@@ -6,13 +6,14 @@ from contextlib import asynccontextmanager
 from app.db.session import engine, Base
 from app.db.public_models import Tenant
 from app.modules.core_hr.models import User, Department
+import app.modules.employee_profile.models  # noqa: F401 — registers EmployeeProfile, EmergencyContact, etc. onto Base
 
 import asyncio
 from sqlalchemy.exc import OperationalError, InterfaceError
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize public tables (like the Tenants directory) on startup
+    # 1. Wait for DB + create public schema tables (e.g. tenants)
     retries = 10
     while retries > 0:
         try:
@@ -25,6 +26,30 @@ async def lifespan(app: FastAPI):
                 raise e
             print(f"Database connection failed, retrying in 2 seconds... ({retries} retries left)")
             await asyncio.sleep(2)
+
+    # 2. Auto-migrate ALL existing tenant schemas
+    #    create_all uses IF NOT EXISTS — safe to run every startup.
+    #    This ensures new tables (employee_profiles etc.) appear in old schemas.
+    from app.db.session import AsyncSessionLocal
+    from sqlalchemy.future import select
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(Tenant))
+            tenants = result.scalars().all()
+
+        for tenant in tenants:
+            try:
+                async with engine.begin() as conn:
+                    conn = await conn.execution_options(
+                        schema_translate_map={None: tenant.schema_name}
+                    )
+                    await conn.run_sync(Base.metadata.create_all)
+                print(f"✓ Migrated schema: {tenant.schema_name}")
+            except Exception as e:
+                print(f"⚠ Could not migrate schema {tenant.schema_name}: {e}")
+    except Exception as e:
+        print(f"⚠ Tenant auto-migration skipped: {e}")
+
     yield
 
 app = FastAPI(
@@ -32,6 +57,15 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
     lifespan=lifespan
 )
+
+# Serve uploaded files (e.g. profile photos)
+import os
+from fastapi.staticfiles import StaticFiles
+
+UPLOAD_DIR = "/app/uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
 
 # Set all CORS enabled origins
 app.add_middleware(
