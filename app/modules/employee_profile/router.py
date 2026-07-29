@@ -127,6 +127,53 @@ async def get_my_profile(
 
 
 @router.get(
+    "/org-tree",
+    response_model=List[schemas.OrgNode],
+    summary="Full org tree — all employees with their manager_id in one call"
+)
+async def get_org_tree(
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Returns ALL employees as a flat list with their manager_id.
+    The frontend uses this single call to build the full hierarchical org chart.
+    Employees with manager_id=None are the root nodes (CEO / Founders).
+    """
+    # Fetch all users with their department
+    users_result = await db.execute(
+        select(User)
+        .options(selectinload(User.department))
+        .where(User.is_active == True)
+    )
+    users = {u.id: u for u in users_result.scalars().all()}
+
+    # Fetch all profiles (to get manager_id and photo)
+    profiles_result = await db.execute(
+        select(models.EmployeeProfile)
+    )
+    profiles = {p.user_id: p for p in profiles_result.scalars().all()}
+
+    nodes = []
+    for user_id, u in users.items():
+        profile = profiles.get(user_id)
+        nodes.append(schemas.OrgNode(
+            user_id=u.id,
+            first_name=u.first_name,
+            last_name=u.last_name,
+            email=u.email,
+            job_title=u.job_title,
+            profile_photo_url=profile.profile_photo_url if profile else None,
+            department=u.department,
+            manager_id=profile.manager_id if profile else None,
+            employment_status=profile.employment_status.value if profile and profile.employment_status else None,
+            is_active=u.is_active,
+        ))
+
+    return nodes
+
+
+@router.get(
     "/{profile_id}",
     response_model=schemas.EmployeeProfileOut,
     summary="Get employee profile by ID"
@@ -820,50 +867,3 @@ async def get_direct_reports(
         ))
 
     return summaries
-
-
-@router.get(
-    "/org-tree",
-    response_model=List[schemas.OrgNode],
-    summary="Full org tree — all employees with their manager_id in one call"
-)
-async def get_org_tree(
-    db: AsyncSession = Depends(get_tenant_db_from_token),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Returns ALL employees as a flat list with their manager_id.
-    The frontend uses this single call to build the full hierarchical org chart.
-    Employees with manager_id=None are the root nodes (CEO / Founders).
-    """
-    # Fetch all users with their department
-    users_result = await db.execute(
-        select(User)
-        .options(selectinload(User.department))
-        .where(User.is_active == True)
-    )
-    users = {u.id: u for u in users_result.scalars().all()}
-
-    # Fetch all profiles (to get manager_id and photo)
-    profiles_result = await db.execute(
-        select(models.EmployeeProfile)
-    )
-    profiles = {p.user_id: p for p in profiles_result.scalars().all()}
-
-    nodes = []
-    for user_id, u in users.items():
-        profile = profiles.get(user_id)
-        nodes.append(schemas.OrgNode(
-            user_id=u.id,
-            first_name=u.first_name,
-            last_name=u.last_name,
-            email=u.email,
-            job_title=u.job_title,
-            profile_photo_url=profile.profile_photo_url if profile else None,
-            department=u.department,
-            manager_id=profile.manager_id if profile else None,
-            employment_status=profile.employment_status.value if profile and profile.employment_status else None,
-            is_active=u.is_active,
-        ))
-
-    return nodes
