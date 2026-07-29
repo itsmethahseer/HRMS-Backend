@@ -19,9 +19,7 @@ async def get_db() -> AsyncSession:
 
 async def get_tenant_db(tenant_schema: str) -> AsyncSession:
     """Gets a tenant-aware session that routes all queries to the tenant's schema"""
-    async with AsyncSessionLocal() as session:
-        # This is the magic! It tells SQLAlchemy to replace the default 'None' schema with our tenant's schema
-        session.execution_options(schema_translate_map={None: tenant_schema})
+    async with AsyncSessionLocal(bind=engine.execution_options(schema_translate_map={None: tenant_schema})) as session:
         try:
             yield session
         finally:

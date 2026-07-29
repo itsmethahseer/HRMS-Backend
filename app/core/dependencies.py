@@ -27,8 +27,8 @@ async def get_token_payload(token: str = Depends(oauth2_scheme)) -> dict:
 
 async def get_tenant_db_from_token(payload: dict = Depends(get_token_payload)) -> AsyncSession:
     schema_name = payload.get("schema_name")
-    async with AsyncSessionLocal() as session:
-        session.execution_options(schema_translate_map={None: schema_name})
+    from app.db.session import engine
+    async with AsyncSessionLocal(bind=engine.execution_options(schema_translate_map={None: schema_name})) as session:
         try:
             yield session
         finally:

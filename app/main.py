@@ -7,11 +7,24 @@ from app.db.session import engine, Base
 from app.db.public_models import Tenant
 from app.modules.core_hr.models import User, Department
 
+import asyncio
+from sqlalchemy.exc import OperationalError, InterfaceError
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize public tables (like the Tenants directory) on startup
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    retries = 10
+    while retries > 0:
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            break
+        except (OperationalError, InterfaceError) as e:
+            retries -= 1
+            if retries == 0:
+                raise e
+            print(f"Database connection failed, retrying in 2 seconds... ({retries} retries left)")
+            await asyncio.sleep(2)
     yield
 
 app = FastAPI(

@@ -39,14 +39,13 @@ async def register_company(data: schemas.CompanyRegister, db: AsyncSession = Dep
     # 4. Create all tables inside the new schema
     async with engine.begin() as conn:
         # We tell SQLAlchemy to translate the 'None' schema to our new schema
-        await conn.execution_options(schema_translate_map={None: schema_name})
+        conn = await conn.execution_options(schema_translate_map={None: schema_name})
         await conn.run_sync(CoreBase.metadata.create_all)
     
     # 5. Insert the Admin user into the new schema's users table
     # We create a new temporary session just for this tenant to insert the admin
     from app.db.session import AsyncSessionLocal
-    async with AsyncSessionLocal() as tenant_session:
-        tenant_session.execution_options(schema_translate_map={None: schema_name})
+    async with AsyncSessionLocal(bind=engine.execution_options(schema_translate_map={None: schema_name})) as tenant_session:
         admin_user = User(
             email=data.admin_email,
             hashed_password=pwd_context.hash(data.admin_password),
