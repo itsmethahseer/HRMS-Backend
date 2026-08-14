@@ -7,7 +7,6 @@ class Tenant(Base):
     This table lives in the 'public' schema and keeps track of all companies.
     """
     __tablename__ = "tenants"
-    __table_args__ = {"schema": "public"}
 
     id = Column(Integer, primary_key=True, index=True)
     company_name = Column(String, unique=True, nullable=False)

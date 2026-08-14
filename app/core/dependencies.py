@@ -27,8 +27,12 @@ async def get_token_payload(token: str = Depends(oauth2_scheme)) -> dict:
 
 async def get_tenant_db_from_token(payload: dict = Depends(get_token_payload)) -> AsyncSession:
     schema_name = payload.get("schema_name")
-    from app.db.session import engine
-    async with AsyncSessionLocal(bind=engine.execution_options(schema_translate_map={None: schema_name})) as session:
+    import app.db.session as sess_module
+    cur_engine = sess_module.engine
+    is_postgres = "postgresql" in str(cur_engine.url)
+    opts = {"schema_translate_map": {None: schema_name}} if is_postgres else {}
+    bind_engine = cur_engine.execution_options(**opts) if opts else cur_engine
+    async with sess_module.AsyncSessionLocal(bind=bind_engine) as session:
         try:
             yield session
         finally:

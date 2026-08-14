@@ -34,8 +34,12 @@ async def login(credentials: schemas.LoginRequest, db: AsyncSession = Depends(ge
         raise HTTPException(status_code=400, detail="Company not found")
 
     # 2. Open a NEW database session pointed specifically at this company's schema
-    from app.db.session import engine
-    async with AsyncSessionLocal(bind=engine.execution_options(schema_translate_map={None: tenant.schema_name})) as tenant_db:
+    import app.db.session as sess_module
+    cur_engine = sess_module.engine
+    is_postgres = "postgresql" in str(cur_engine.url)
+    opts = {"schema_translate_map": {None: tenant.schema_name}} if is_postgres else {}
+    bind_engine = cur_engine.execution_options(**opts) if opts else cur_engine
+    async with sess_module.AsyncSessionLocal(bind=bind_engine) as tenant_db:
         
         # 3. Look up the user inside this tenant's schema
         user_result = await tenant_db.execute(select(User).where(User.email == credentials.email))

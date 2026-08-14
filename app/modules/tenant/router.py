@@ -7,13 +7,19 @@ from sqlalchemy import text
 from app.db.session import get_db, engine
 from app.db.public_models import Tenant
 from app.modules.tenant import schemas
-from app.modules.core_hr.models import Base as CoreBase, User
-import app.modules.employee_profile.models  # noqa: F401 — registers models onto CoreBase metadata
-from passlib.context import CryptContext
-
+from app.modules.core_hr.models import Base as CoreBase, User, Department, Designation, WorkLocation
+import app.modules.employee_profile.models  # noqa: F401
+import app.modules.attendance.models  # noqa: F401
+import app.modules.leave.models  # noqa: F401
+import app.modules.payroll.models  # noqa: F401
+import app.modules.expense.models  # noqa: F401
+import app.modules.pms.models  # noqa: F401
+import app.modules.recruitment.models  # noqa: F401
+import app.modules.helpdesk.models  # noqa: F401
+import app.modules.asset.models  # noqa: F401
+from app.core.security import get_password_hash
 
 router = APIRouter()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def sanitize_schema_name(name: str) -> str:
     # Convert company name to a valid postgres schema name
@@ -34,23 +40,27 @@ async def register_company(data: schemas.CompanyRegister, db: AsyncSession = Dep
     await db.commit()
     await db.refresh(new_tenant)
 
-    # 3. Create the PostgreSQL Schema physically
-    await db.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
-    await db.commit()
+    # 3. Create the PostgreSQL Schema physically (if using PostgreSQL)
+    import app.db.session as sess_module
+    cur_engine = sess_module.engine
+    is_postgres = "postgresql" in str(cur_engine.url)
+    if is_postgres:
+        await db.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
+        await db.commit()
 
     # 4. Create all tables inside the new schema
-    async with engine.begin() as conn:
-        # We tell SQLAlchemy to translate the 'None' schema to our new schema
-        conn = await conn.execution_options(schema_translate_map={None: schema_name})
+    async with cur_engine.begin() as conn:
+        if is_postgres:
+            conn = await conn.execution_options(schema_translate_map={None: schema_name})
         await conn.run_sync(CoreBase.metadata.create_all)
     
     # 5. Insert the Admin user into the new schema's users table
-    # We create a new temporary session just for this tenant to insert the admin
-    from app.db.session import AsyncSessionLocal
-    async with AsyncSessionLocal(bind=engine.execution_options(schema_translate_map={None: schema_name})) as tenant_session:
+    opts = {"schema_translate_map": {None: schema_name}} if is_postgres else {}
+    bind_engine = cur_engine.execution_options(**opts) if opts else cur_engine
+    async with sess_module.AsyncSessionLocal(bind=bind_engine) as tenant_session:
         admin_user = User(
             email=data.admin_email,
-            hashed_password=pwd_context.hash(data.admin_password),
+            hashed_password=get_password_hash(data.admin_password),
             first_name=data.admin_first_name,
             last_name=data.admin_last_name,
             is_superuser=True, # This is the main admin

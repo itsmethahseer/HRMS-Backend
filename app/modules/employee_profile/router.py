@@ -24,7 +24,8 @@ from app.modules.employee_profile import models, schemas
 
 router = APIRouter()
 
-UPLOAD_DIR = "/app/uploads/profile_photos"
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.abspath("uploads/profile_photos"))
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

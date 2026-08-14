@@ -5,8 +5,16 @@ from app.core.config import settings
 from contextlib import asynccontextmanager
 from app.db.session import engine, Base
 from app.db.public_models import Tenant
-from app.modules.core_hr.models import User, Department
-import app.modules.employee_profile.models  # noqa: F401 — registers EmployeeProfile, EmergencyContact, etc. onto Base
+from app.modules.core_hr.models import User, Department, Designation, WorkLocation  # noqa: F401
+import app.modules.employee_profile.models  # noqa: F401
+import app.modules.attendance.models  # noqa: F401
+import app.modules.leave.models  # noqa: F401
+import app.modules.payroll.models  # noqa: F401
+import app.modules.expense.models  # noqa: F401
+import app.modules.pms.models  # noqa: F401
+import app.modules.recruitment.models  # noqa: F401
+import app.modules.helpdesk.models  # noqa: F401
+import app.modules.asset.models  # noqa: F401
 
 import asyncio
 from sqlalchemy.exc import OperationalError, InterfaceError
@@ -62,7 +70,7 @@ app = FastAPI(
 import os
 from fastapi.staticfiles import StaticFiles
 
-UPLOAD_DIR = "/app/uploads"
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.abspath("uploads"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
