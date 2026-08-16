@@ -23,7 +23,7 @@ services:
       - db
     volumes:
       - .:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: /app/entrypoint.sh
     environment:
       - POSTGRES_SERVER=127.0.0.1
       - POSTGRES_USER=postgres
