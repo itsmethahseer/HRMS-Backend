@@ -15,6 +15,8 @@ import app.modules.pms.models  # noqa: F401
 import app.modules.recruitment.models  # noqa: F401
 import app.modules.helpdesk.models  # noqa: F401
 import app.modules.asset.models  # noqa: F401
+import app.modules.notifications.models  # noqa: F401
+
 
 import asyncio
 from sqlalchemy.exc import OperationalError, InterfaceError

@@ -181,15 +181,82 @@ async def run_full_suite(base_url_arg: str = None):
             print(f"{Colors.FAIL}Failed to authenticate. Stopping tests.{Colors.END}")
             return
         tester.set_token(token)
+        admin_uid = login_data.get("user_id", 1)
         print(f"     {Colors.GREEN}✓ Authenticated successfully as {admin_email}{Colors.END}")
 
         # Verify /auth/me
         await tester.request("GET", "/auth/me", expected_status=200, module="Authentication")
 
+        # Refresh Token
+        code, refresh_data = await tester.request(
+            "POST", "/auth/refresh",
+            expected_status=200,
+            module="Authentication"
+        )
+        if refresh_data and isinstance(refresh_data, dict) and refresh_data.get("access_token"):
+            tester.set_token(refresh_data.get("access_token"))
+
+        # Change Password
+        await tester.request(
+            "POST", "/auth/change-password",
+            json_body={
+                "current_password": admin_password,
+                "new_password": "NewPassword@123"
+            },
+            expected_status=200,
+            module="Authentication"
+        )
+        # Re-login to get token with new password
+        code, login_data2 = await tester.request(
+            "POST", "/auth/login",
+            json_body={"company_name": company_name, "email": admin_email, "password": "NewPassword@123"},
+            expected_status=200,
+            module="Authentication"
+        )
+        tester.set_token(login_data2.get("access_token"))
+
+        # Forgot / Reset Password
+        code, forgot_data = await tester.request(
+            "POST", "/auth/forgot-password",
+            json_body={"company_name": company_name, "email": admin_email},
+            expected_status=200,
+            module="Authentication"
+        )
+        reset_token = forgot_data.get("reset_token")
+        if reset_token:
+            await tester.request(
+                "POST", "/auth/reset-password",
+                json_body={"token": reset_token, "new_password": admin_password},
+                expected_status=200,
+                module="Authentication"
+            )
+            # Re-login with original password
+            code, login_data3 = await tester.request(
+                "POST", "/auth/login",
+                json_body={"company_name": company_name, "email": admin_email, "password": admin_password},
+                expected_status=200,
+                module="Authentication"
+            )
+            tester.set_token(login_data3.get("access_token"))
+            
+        # Tenant Profile
+        await tester.request("GET", "/tenants/me", expected_status=200, module="Tenants")
+        await tester.request("PATCH", "/tenants/me", json_body={"is_active": True}, expected_status=200, module="Tenants")
+
         # ─────────────────────────────────────────────────────────────
         # 2. CORE HR & ORGANIZATION
         # ─────────────────────────────────────────────────────────────
         print(f"\n{Colors.BOLD}{Colors.BLUE}▶ 2. Core HR & Organization Structure{Colors.END}")
+
+        # Permissions and Roles (RBAC)
+        _, perm1 = await tester.request("POST", "/core/permissions/", json_body={"name": f"employee:read:{timestamp_suffix}", "resource": "employee", "action": "read"}, expected_status=201, module="Core HR")
+        perm_id = perm1.get("id") if isinstance(perm1, dict) else 1
+        await tester.request("GET", "/core/permissions/", expected_status=200, module="Core HR")
+
+        _, role1 = await tester.request("POST", "/core/roles/", json_body={"name": f"Admin Role {timestamp_suffix}", "description": "Administrator", "permission_ids": [perm_id]}, expected_status=201, module="Core HR")
+        role_id = role1.get("id") if isinstance(role1, dict) else 1
+        await tester.request("GET", "/core/roles/", expected_status=200, module="Core HR")
+        await tester.request("GET", f"/core/roles/{role_id}", expected_status=200, module="Core HR")
 
         # Departments (CRUD)
         _, dept1 = await tester.request("POST", "/core/departments/", json_body={"name": f"Engineering {timestamp_suffix}", "description": "Software Engineering & IT"}, expected_status=201, module="Core HR")
@@ -227,6 +294,8 @@ async def run_full_suite(base_url_arg: str = None):
             "department_id": dept_id,
             "designation_id": desig_id,
             "work_location_id": loc_id,
+            "role_id": role_id,
+            "manager_id": admin_uid,
             "is_active": True
         }, expected_status=201, module="Core HR")
         emp_id = emp1.get("id") if isinstance(emp1, dict) else 1
@@ -234,14 +303,22 @@ async def run_full_suite(base_url_arg: str = None):
         await tester.request("GET", f"/core/employees/{emp_id}", expected_status=200, module="Core HR")
         await tester.request("PATCH", f"/core/employees/{emp_id}", json_body={"job_title": "Principal Staff Engineer"}, expected_status=200, module="Core HR")
 
+        await tester.request("GET", "/core/employees/directory", expected_status=200, module="Core HR")
+        await tester.request("GET", f"/core/employees/{admin_uid}/team", expected_status=200, module="Core HR")
+        await tester.request("GET", "/core/org-chart", expected_status=200, module="Core HR")
+
+        await tester.request("POST", f"/core/employees/{emp_id}/initiate-exit", json_body={"exit_date": "2026-12-31", "exit_reason": "Moving abroad", "exit_type": "resignation"}, expected_status=200, module="Core HR")
+        
+        # Note: We won't complete exit here because emp_id is needed for subsequent tests.
+        
         # ─────────────────────────────────────────────────────────────
         # 3. EMPLOYEE PROFILES & DOCUMENTS
         # ─────────────────────────────────────────────────────────────
         print(f"\n{Colors.BOLD}{Colors.BLUE}▶ 3. Employee Profiles, Documents & Org Tree{Colors.END}")
 
         # 1. Admin Profile
-        admin_uid = login_data.get("user_id", 1)
         await tester.request("POST", "/profiles/", json_body={
+
             "user_id": admin_uid,
             "date_of_birth": "1990-01-01",
             "gender": "male",
@@ -300,6 +377,13 @@ async def run_full_suite(base_url_arg: str = None):
         shift_id = shift1.get("id") if isinstance(shift1, dict) else 1
         await tester.request("GET", "/attendance/shifts/", expected_status=200, module="Attendance")
 
+        # Shift Assignments
+        _, sa1 = await tester.request("POST", "/attendance/shift-assignments/", json_body={"employee_id": emp_id, "shift_id": shift_id, "effective_from": "2026-01-01"}, expected_status=201, module="Attendance")
+        sa_id = sa1.get("id") if isinstance(sa1, dict) else 1
+        await tester.request("GET", "/attendance/shift-assignments/", expected_status=200, module="Attendance")
+        await tester.request("GET", "/attendance/shift-assignments/my", expected_status=200, module="Attendance")
+        await tester.request("PATCH", f"/attendance/shift-assignments/{sa_id}", json_body={"is_active": False}, expected_status=200, module="Attendance")
+
         _, geo1 = await tester.request("POST", "/attendance/geofences/", json_body={"name": "Bengaluru Main Campus", "latitude": 12.9716, "longitude": 77.5946, "radius_meters": 200.0}, expected_status=201, module="Attendance")
         await tester.request("GET", "/attendance/geofences/", expected_status=200, module="Attendance")
 
@@ -310,6 +394,7 @@ async def run_full_suite(base_url_arg: str = None):
         # Logs & Filters
         await tester.request("GET", "/attendance/logs/", expected_status=200, module="Attendance")
         await tester.request("GET", "/attendance/logs/my", expected_status=200, module="Attendance")
+        await tester.request("GET", "/attendance/summary", expected_status=200, module="Attendance")
 
         # Attendance Regularization
         today_str = date.today().isoformat()
@@ -323,6 +408,13 @@ async def run_full_suite(base_url_arg: str = None):
         ot_id = ot1.get("id") if isinstance(ot1, dict) else 1
         await tester.request("GET", "/attendance/overtime/", expected_status=200, module="Attendance")
         await tester.request("PATCH", f"/attendance/overtime/{ot_id}/approve", json_body={"approver_comment": "Approved OT for production support"}, expected_status=200, module="Attendance")
+
+        # WFH Requests
+        _, wfh1 = await tester.request("POST", "/attendance/wfh-requests/", json_body={"date": (date.today() + timedelta(days=2)).isoformat(), "reason": "Doctor appointment"}, expected_status=201, module="Attendance")
+        wfh_id = wfh1.get("id") if isinstance(wfh1, dict) else 1
+        await tester.request("GET", "/attendance/wfh-requests/", expected_status=200, module="Attendance")
+        await tester.request("GET", "/attendance/wfh-requests/my", expected_status=200, module="Attendance")
+        await tester.request("PATCH", f"/attendance/wfh-requests/{wfh_id}/approve", json_body={"approver_comment": "Okay"}, expected_status=200, module="Attendance")
 
         # ─────────────────────────────────────────────────────────────
         # 5. LEAVE & ABSENCE MANAGEMENT
@@ -708,9 +800,39 @@ async def run_full_suite(base_url_arg: str = None):
         await tester.request("GET", "/analytics/payroll-cost-summary", expected_status=200, module="Analytics")
         await tester.request("GET", "/analytics/recruitment-funnel", expected_status=200, module="Analytics")
 
+        # ─────────────────────────────────────────────────────────────
+        # 13. NOTIFICATIONS
+        # ─────────────────────────────────────────────────────────────
+        print(f"\n{Colors.BOLD}{Colors.BLUE}▶ 13. Notifications Inbox{Colors.END}")
+        
+        _, notif1 = await tester.request("POST", "/notifications/", json_body={
+            "recipient_id": emp_id,
+            "title": "Welcome",
+            "message": "Welcome to the team!",
+            "notification_type": "system"
+        }, expected_status=201, module="Notifications")
+        notif_id = notif1.get("id") if isinstance(notif1, dict) else 1
+
+        # Because emp_id is the recipient, we need to log in as emp_id to see it,
+        # but for simplicity, we'll just test the endpoints logged in as Admin, so we create one for admin
+        _, notif_admin = await tester.request("POST", "/notifications/", json_body={
+            "recipient_id": admin_uid,
+            "title": "Welcome Admin",
+            "message": "System is ready",
+            "notification_type": "system"
+        }, expected_status=201, module="Notifications")
+        notif_admin_id = notif_admin.get("id") if isinstance(notif_admin, dict) else 1
+
+        await tester.request("GET", "/notifications/my", expected_status=200, module="Notifications")
+        await tester.request("GET", "/notifications/my/summary", expected_status=200, module="Notifications")
+        await tester.request("PATCH", f"/notifications/{notif_admin_id}/read", expected_status=200, module="Notifications")
+        await tester.request("PATCH", "/notifications/my/mark-all-read", expected_status=200, module="Notifications")
+        await tester.request("DELETE", f"/notifications/{notif_admin_id}", expected_status=200, module="Notifications")
+
     # ─────────────────────────────────────────────────────────────
     # SUMMARY REPORT
     # ─────────────────────────────────────────────────────────────
+
     total_tests = len(tester.results)
     passed_tests = sum(1 for r in tester.results if r["passed"])
     failed_tests = total_tests - passed_tests

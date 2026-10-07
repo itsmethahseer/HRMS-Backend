@@ -3,12 +3,218 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
+from datetime import date
 
 from app.core.dependencies import get_tenant_db_from_token, get_current_user
 from app.modules.core_hr import models, schemas
 from app.core.security import get_password_hash
 
 router = APIRouter()
+
+
+# ═══════════════════════════════════════════════════════════
+# ROLES (GET, POST, GET/{id}, PUT, PATCH, DELETE)
+# ═══════════════════════════════════════════════════════════
+
+@router.post("/roles/", response_model=schemas.RoleOut, status_code=status.HTTP_201_CREATED, summary="Create Role")
+async def create_role(
+    data: schemas.RoleCreate,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    existing = await db.execute(select(models.Role).where(models.Role.name == data.name))
+    if existing.scalars().first():
+        raise HTTPException(status_code=400, detail="Role already exists")
+
+    role = models.Role(name=data.name, description=data.description, is_active=data.is_active)
+    db.add(role)
+    await db.flush()
+
+    for perm_id in (data.permission_ids or []):
+        rp = models.RolePermission(role_id=role.id, permission_id=perm_id)
+        db.add(rp)
+
+    await db.commit()
+    res = await db.execute(
+        select(models.Role).options(
+            selectinload(models.Role.permissions).selectinload(models.RolePermission.permission)
+        ).where(models.Role.id == role.id)
+    )
+    return res.scalars().first()
+
+
+@router.get("/roles/", response_model=List[schemas.RoleOut], summary="List Roles")
+async def list_roles(
+    skip: int = 0, limit: int = 100,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    result = await db.execute(
+        select(models.Role)
+        .options(selectinload(models.Role.permissions).selectinload(models.RolePermission.permission))
+        .offset(skip).limit(limit)
+    )
+    return result.scalars().all()
+
+
+@router.get("/roles/{id}", response_model=schemas.RoleOut, summary="Get Role by ID")
+async def get_role(
+    id: int,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    result = await db.execute(
+        select(models.Role)
+        .options(selectinload(models.Role.permissions).selectinload(models.RolePermission.permission))
+        .where(models.Role.id == id)
+    )
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Role not found")
+    return item
+
+
+@router.put("/roles/{id}", response_model=schemas.RoleOut, summary="Update Role (Full)")
+async def update_role(
+    id: int,
+    data: schemas.RoleCreate,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    result = await db.execute(select(models.Role).where(models.Role.id == id))
+    role = result.scalars().first()
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+
+    role.name = data.name
+    role.description = data.description
+    role.is_active = data.is_active if data.is_active is not None else role.is_active
+
+    # Replace permissions
+    existing_rps = await db.execute(select(models.RolePermission).where(models.RolePermission.role_id == id))
+    for rp in existing_rps.scalars().all():
+        await db.delete(rp)
+    for perm_id in (data.permission_ids or []):
+        db.add(models.RolePermission(role_id=id, permission_id=perm_id))
+
+    await db.commit()
+    res = await db.execute(
+        select(models.Role)
+        .options(selectinload(models.Role.permissions).selectinload(models.RolePermission.permission))
+        .where(models.Role.id == id)
+    )
+    return res.scalars().first()
+
+
+@router.patch("/roles/{id}", response_model=schemas.RoleOut, summary="Update Role (Partial)")
+async def patch_role(
+    id: int,
+    data: schemas.RoleUpdate,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    result = await db.execute(select(models.Role).where(models.Role.id == id))
+    role = result.scalars().first()
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+
+    update_data = data.model_dump(exclude_unset=True)
+    perm_ids = update_data.pop("permission_ids", None)
+
+    for key, value in update_data.items():
+        setattr(role, key, value)
+
+    if perm_ids is not None:
+        existing_rps = await db.execute(select(models.RolePermission).where(models.RolePermission.role_id == id))
+        for rp in existing_rps.scalars().all():
+            await db.delete(rp)
+        for perm_id in perm_ids:
+            db.add(models.RolePermission(role_id=id, permission_id=perm_id))
+
+    await db.commit()
+    res = await db.execute(
+        select(models.Role)
+        .options(selectinload(models.Role.permissions).selectinload(models.RolePermission.permission))
+        .where(models.Role.id == id)
+    )
+    return res.scalars().first()
+
+
+@router.delete("/roles/{id}", status_code=status.HTTP_200_OK, summary="Delete Role")
+async def delete_role(
+    id: int,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    result = await db.execute(select(models.Role).where(models.Role.id == id))
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Role not found")
+    await db.delete(item)
+    await db.commit()
+    return {"detail": "Role deleted successfully"}
+
+
+# ═══════════════════════════════════════════════════════════
+# PERMISSIONS (GET, POST, GET/{id}, DELETE)
+# ═══════════════════════════════════════════════════════════
+
+@router.post("/permissions/", response_model=schemas.PermissionOut, status_code=status.HTTP_201_CREATED, summary="Create Permission")
+async def create_permission(
+    data: schemas.PermissionCreate,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    existing = await db.execute(select(models.Permission).where(models.Permission.name == data.name))
+    if existing.scalars().first():
+        raise HTTPException(status_code=400, detail="Permission already exists")
+    perm = models.Permission(**data.model_dump())
+    db.add(perm)
+    await db.commit()
+    await db.refresh(perm)
+    return perm
+
+
+@router.get("/permissions/", response_model=List[schemas.PermissionOut], summary="List Permissions")
+async def list_permissions(
+    resource: Optional[str] = None,
+    skip: int = 0, limit: int = 100,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    query = select(models.Permission)
+    if resource:
+        query = query.where(models.Permission.resource == resource)
+    result = await db.execute(query.offset(skip).limit(limit))
+    return result.scalars().all()
+
+
+@router.get("/permissions/{id}", response_model=schemas.PermissionOut, summary="Get Permission by ID")
+async def get_permission(
+    id: int,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    result = await db.execute(select(models.Permission).where(models.Permission.id == id))
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Permission not found")
+    return item
+
+
+@router.delete("/permissions/{id}", status_code=status.HTTP_200_OK, summary="Delete Permission")
+async def delete_permission(
+    id: int,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    result = await db.execute(select(models.Permission).where(models.Permission.id == id))
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Permission not found")
+    await db.delete(item)
+    await db.commit()
+    return {"detail": "Permission deleted successfully"}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -319,6 +525,15 @@ async def delete_location(
 # EMPLOYEES / USERS (GET, POST, GET/{id}, PUT, PATCH, DELETE)
 # ═══════════════════════════════════════════════════════════
 
+def _user_load_options():
+    return [
+        selectinload(models.User.department),
+        selectinload(models.User.designation),
+        selectinload(models.User.work_location),
+        selectinload(models.User.role).selectinload(models.Role.permissions).selectinload(models.RolePermission.permission),
+    ]
+
+
 @router.post("/employees/", response_model=schemas.User, status_code=status.HTTP_201_CREATED, summary="Create Employee")
 async def create_employee(
     user: schemas.UserCreate, 
@@ -329,34 +544,47 @@ async def create_employee(
     if result.scalars().first():
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    db_user = models.User(
-        email=user.email,
-        hashed_password=get_password_hash(user.password),
-        first_name=user.first_name,
-        last_name=user.last_name,
-        phone_number=user.phone_number,
-        job_title=user.job_title,
-        employee_code=user.employee_code,
-        department_id=user.department_id,
-        designation_id=user.designation_id,
-        work_location_id=user.work_location_id,
-        is_active=user.is_active if user.is_active is not None else True,
-        is_superuser=user.is_superuser if user.is_superuser is not None else False
-    )
+    data = user.model_dump(exclude={"password"})
+    db_user = models.User(**data, hashed_password=get_password_hash(user.password))
     db.add(db_user)
     await db.commit()
     await db.refresh(db_user)
     
     result = await db.execute(
+        select(models.User).options(*_user_load_options()).where(models.User.id == db_user.id)
+    )
+    return result.scalars().first()
+
+
+@router.get("/employees/directory", response_model=List[schemas.EmployeeDirectoryItem], summary="Employee Directory (Lightweight)")
+async def employee_directory(
+    department_id: Optional[int] = None,
+    search: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 200,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Public-facing lightweight employee directory (no sensitive data)."""
+    query = (
         select(models.User)
         .options(
             selectinload(models.User.department),
             selectinload(models.User.designation),
-            selectinload(models.User.work_location)
+            selectinload(models.User.work_location),
         )
-        .where(models.User.id == db_user.id)
+        .where(models.User.is_active == True)
     )
-    return result.scalars().first()
+    if department_id:
+        query = query.where(models.User.department_id == department_id)
+    if search:
+        query = query.where(
+            (models.User.first_name.ilike(f"%{search}%")) |
+            (models.User.last_name.ilike(f"%{search}%")) |
+            (models.User.job_title.ilike(f"%{search}%"))
+        )
+    result = await db.execute(query.offset(skip).limit(limit))
+    return result.scalars().all()
 
 
 @router.get("/employees/", response_model=List[schemas.User], summary="List Employees")
@@ -370,14 +598,7 @@ async def read_employees(
     db: AsyncSession = Depends(get_tenant_db_from_token),
     current_user: models.User = Depends(get_current_user)
 ):
-    query = (
-        select(models.User)
-        .options(
-            selectinload(models.User.department),
-            selectinload(models.User.designation),
-            selectinload(models.User.work_location)
-        )
-    )
+    query = select(models.User).options(*_user_load_options())
     if department_id:
         query = query.where(models.User.department_id == department_id)
     if designation_id:
@@ -395,6 +616,64 @@ async def read_employees(
     return result.scalars().all()
 
 
+@router.get("/employees/{user_id}/team", response_model=List[schemas.EmployeeDirectoryItem], summary="Get Employee's Direct Reports (Team)")
+async def get_employee_team(
+    user_id: int,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Returns all employees who report directly to the given user."""
+    result = await db.execute(
+        select(models.User)
+        .options(
+            selectinload(models.User.department),
+            selectinload(models.User.designation),
+            selectinload(models.User.work_location),
+        )
+        .where(models.User.manager_id == user_id, models.User.is_active == True)
+    )
+    return result.scalars().all()
+
+
+@router.post("/employees/{user_id}/initiate-exit", summary="Initiate Employee Exit / Offboarding")
+async def initiate_exit(
+    user_id: int,
+    data: schemas.InitiateExitRequest,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Marks an employee's exit with date, reason, and type."""
+    result = await db.execute(select(models.User).where(models.User.id == user_id))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    user.exit_date = data.exit_date
+    user.exit_reason = data.exit_reason
+    user.exit_type = data.exit_type
+    await db.commit()
+    return {"detail": f"Exit initiated for employee {user_id}. Exit date: {data.exit_date}"}
+
+
+@router.patch("/employees/{user_id}/complete-exit", summary="Complete Employee Exit (Deactivate)")
+async def complete_exit(
+    user_id: int,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Deactivates the employee account after completing offboarding."""
+    result = await db.execute(select(models.User).where(models.User.id == user_id))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if not user.exit_date:
+        raise HTTPException(status_code=400, detail="Exit must be initiated first via /initiate-exit")
+
+    user.is_active = False
+    await db.commit()
+    return {"detail": f"Employee {user_id} has been deactivated. Offboarding complete."}
+
+
 @router.get("/employees/{user_id}", response_model=schemas.User, summary="Get Employee by ID")
 async def get_employee(
     user_id: int,
@@ -402,13 +681,7 @@ async def get_employee(
     current_user: models.User = Depends(get_current_user)
 ):
     result = await db.execute(
-        select(models.User)
-        .options(
-            selectinload(models.User.department),
-            selectinload(models.User.designation),
-            selectinload(models.User.work_location)
-        )
-        .where(models.User.id == user_id)
+        select(models.User).options(*_user_load_options()).where(models.User.id == user_id)
     )
     user = result.scalars().first()
     if not user:
@@ -428,17 +701,9 @@ async def update_employee(
     if not user:
         raise HTTPException(status_code=404, detail="Employee not found")
     
-    user.email = data.email
-    user.first_name = data.first_name
-    user.last_name = data.last_name
-    user.phone_number = data.phone_number
-    user.job_title = data.job_title
-    user.employee_code = data.employee_code
-    user.department_id = data.department_id
-    user.designation_id = data.designation_id
-    user.work_location_id = data.work_location_id
-    user.is_active = data.is_active if data.is_active is not None else user.is_active
-    user.is_superuser = data.is_superuser if data.is_superuser is not None else user.is_superuser
+    update_dict = data.model_dump(exclude={"password"})
+    for key, value in update_dict.items():
+        setattr(user, key, value)
     if data.password:
         user.hashed_password = get_password_hash(data.password)
 
@@ -446,13 +711,7 @@ async def update_employee(
     await db.refresh(user)
 
     result = await db.execute(
-        select(models.User)
-        .options(
-            selectinload(models.User.department),
-            selectinload(models.User.designation),
-            selectinload(models.User.work_location)
-        )
-        .where(models.User.id == user.id)
+        select(models.User).options(*_user_load_options()).where(models.User.id == user.id)
     )
     return result.scalars().first()
 
@@ -480,13 +739,7 @@ async def patch_employee(
     await db.refresh(user)
 
     result = await db.execute(
-        select(models.User)
-        .options(
-            selectinload(models.User.department),
-            selectinload(models.User.designation),
-            selectinload(models.User.work_location)
-        )
-        .where(models.User.id == user.id)
+        select(models.User).options(*_user_load_options()).where(models.User.id == user.id)
     )
     return result.scalars().first()
 
@@ -505,3 +758,34 @@ async def delete_employee(
     await db.delete(user)
     await db.commit()
     return {"detail": "Employee deleted successfully"}
+
+
+# ═══════════════════════════════════════════════════════════
+# ORG CHART
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/org-chart", response_model=List[schemas.OrgChartNode], summary="Get Organisation Chart")
+async def get_org_chart(
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Returns all active employees with their manager relationships.
+    The frontend can render this as a hierarchical org chart.
+    """
+    result = await db.execute(
+        select(models.User)
+        .options(selectinload(models.User.department))
+        .where(models.User.is_active == True)
+    )
+    users = result.scalars().all()
+    return [
+        schemas.OrgChartNode(
+            id=u.id,
+            name=f"{u.first_name} {u.last_name}",
+            job_title=u.job_title,
+            department=u.department.name if u.department else None,
+            manager_id=u.manager_id,
+        )
+        for u in users
+    ]

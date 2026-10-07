@@ -13,6 +13,7 @@ from app.modules.recruitment.router import router as recruitment_router
 from app.modules.helpdesk.router import router as helpdesk_router
 from app.modules.asset.router import router as asset_router
 from app.modules.analytics.router import router as analytics_router
+from app.modules.notifications.router import router as notifications_router
 
 api_router = APIRouter()
 
@@ -29,3 +30,5 @@ api_router.include_router(recruitment_router, prefix="/recruitment", tags=["Recr
 api_router.include_router(helpdesk_router, prefix="/helpdesk", tags=["Helpdesk & Engagement"])
 api_router.include_router(asset_router, prefix="/assets", tags=["Asset & Inventory Management"])
 api_router.include_router(analytics_router, prefix="/analytics", tags=["Analytics & Executive Reports"])
+api_router.include_router(notifications_router, prefix="/notifications", tags=["Notifications"])
+

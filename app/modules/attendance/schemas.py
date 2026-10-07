@@ -179,3 +179,72 @@ class OvertimeOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# --- Shift Assignment Schemas ---
+class ShiftAssignmentCreate(BaseModel):
+    employee_id: int
+    shift_id: int
+    effective_from: date
+    effective_to: Optional[date] = None
+
+
+class ShiftAssignmentUpdate(BaseModel):
+    shift_id: Optional[int] = None
+    effective_from: Optional[date] = None
+    effective_to: Optional[date] = None
+    is_active: Optional[bool] = None
+
+
+class ShiftAssignmentOut(BaseModel):
+    id: int
+    employee_id: int
+    shift_id: int
+    effective_from: date
+    effective_to: Optional[date] = None
+    is_active: bool
+    shift: Optional[ShiftOut] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# --- WFH Request Schemas ---
+class WFHRequestCreate(BaseModel):
+    date: date
+    reason: str
+
+
+class WFHReview(BaseModel):
+    approver_comment: Optional[str] = None
+
+
+class WFHRequestOut(BaseModel):
+    id: int
+    employee_id: int
+    date: date
+    reason: str
+    status: str
+    approver_id: Optional[int] = None
+    approver_comment: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# --- Attendance Summary ---
+class AttendanceSummaryOut(BaseModel):
+    employee_id: int
+    month: int
+    year: int
+    total_days: int
+    present_days: int
+    absent_days: int
+    late_days: int
+    half_days: int
+    on_leave_days: int
+    holiday_days: int
+    total_hours: float
+

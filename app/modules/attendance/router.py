@@ -701,3 +701,258 @@ async def delete_overtime(
     await db.delete(item)
     await db.commit()
     return {"detail": "Overtime request deleted successfully"}
+
+
+# ═══════════════════════════════════════════════════════════
+# SHIFT ASSIGNMENTS (POST, GET, GET/my, PATCH, DELETE)
+# ═══════════════════════════════════════════════════════════
+
+@router.post("/shift-assignments/", response_model=schemas.ShiftAssignmentOut, status_code=status.HTTP_201_CREATED, summary="Assign Shift to Employee")
+async def create_shift_assignment(
+    data: schemas.ShiftAssignmentCreate,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    assignment = models.ShiftAssignment(**data.model_dump())
+    db.add(assignment)
+    await db.commit()
+    await db.refresh(assignment)
+    res = await db.execute(
+        select(models.ShiftAssignment)
+        .options(selectinload(models.ShiftAssignment.shift))
+        .where(models.ShiftAssignment.id == assignment.id)
+    )
+    return res.scalars().first()
+
+
+@router.get("/shift-assignments/", response_model=List[schemas.ShiftAssignmentOut], summary="List Shift Assignments")
+async def list_shift_assignments(
+    employee_id: Optional[int] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    query = select(models.ShiftAssignment).options(selectinload(models.ShiftAssignment.shift))
+    if employee_id:
+        query = query.where(models.ShiftAssignment.employee_id == employee_id)
+    result = await db.execute(query.offset(skip).limit(limit))
+    return result.scalars().all()
+
+
+@router.get("/shift-assignments/my", response_model=List[schemas.ShiftAssignmentOut], summary="My Shift Assignments")
+async def my_shift_assignments(
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(
+        select(models.ShiftAssignment)
+        .options(selectinload(models.ShiftAssignment.shift))
+        .where(models.ShiftAssignment.employee_id == current_user.id, models.ShiftAssignment.is_active == True)
+    )
+    return result.scalars().all()
+
+
+@router.patch("/shift-assignments/{id}", response_model=schemas.ShiftAssignmentOut, summary="Update Shift Assignment")
+async def update_shift_assignment(
+    id: int,
+    data: schemas.ShiftAssignmentUpdate,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(select(models.ShiftAssignment).where(models.ShiftAssignment.id == id))
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Shift assignment not found")
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(item, key, value)
+    await db.commit()
+    res = await db.execute(
+        select(models.ShiftAssignment).options(selectinload(models.ShiftAssignment.shift)).where(models.ShiftAssignment.id == id)
+    )
+    return res.scalars().first()
+
+
+@router.delete("/shift-assignments/{id}", status_code=status.HTTP_200_OK, summary="Delete Shift Assignment")
+async def delete_shift_assignment(
+    id: int,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(select(models.ShiftAssignment).where(models.ShiftAssignment.id == id))
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Shift assignment not found")
+    await db.delete(item)
+    await db.commit()
+    return {"detail": "Shift assignment deleted successfully"}
+
+
+# ═══════════════════════════════════════════════════════════
+# WFH REQUESTS (POST, GET, GET/my, APPROVE, REJECT, DELETE)
+# ═══════════════════════════════════════════════════════════
+
+@router.post("/wfh-requests/", response_model=schemas.WFHRequestOut, status_code=status.HTTP_201_CREATED, summary="Request Work From Home")
+async def create_wfh_request(
+    data: schemas.WFHRequestCreate,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    req = models.WFHRequest(
+        employee_id=current_user.id,
+        date=data.date,
+        reason=data.reason,
+        status=models.RequestStatusEnum.pending
+    )
+    db.add(req)
+    await db.commit()
+    await db.refresh(req)
+    return req
+
+
+@router.get("/wfh-requests/", response_model=List[schemas.WFHRequestOut], summary="List WFH Requests")
+async def list_wfh_requests(
+    employee_id: Optional[int] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    query = select(models.WFHRequest)
+    if employee_id:
+        query = query.where(models.WFHRequest.employee_id == employee_id)
+    result = await db.execute(query.order_by(models.WFHRequest.date.desc()).offset(skip).limit(limit))
+    return result.scalars().all()
+
+
+@router.get("/wfh-requests/my", response_model=List[schemas.WFHRequestOut], summary="My WFH Requests")
+async def my_wfh_requests(
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(
+        select(models.WFHRequest)
+        .where(models.WFHRequest.employee_id == current_user.id)
+        .order_by(models.WFHRequest.date.desc())
+    )
+    return result.scalars().all()
+
+
+@router.patch("/wfh-requests/{id}/approve", response_model=schemas.WFHRequestOut, summary="Approve WFH Request")
+async def approve_wfh_request(
+    id: int,
+    data: schemas.WFHReview,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(select(models.WFHRequest).where(models.WFHRequest.id == id))
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="WFH request not found")
+    item.status = models.RequestStatusEnum.approved
+    item.approver_id = current_user.id
+    item.approver_comment = data.approver_comment
+    await db.commit()
+    await db.refresh(item)
+    return item
+
+
+@router.patch("/wfh-requests/{id}/reject", response_model=schemas.WFHRequestOut, summary="Reject WFH Request")
+async def reject_wfh_request(
+    id: int,
+    data: schemas.WFHReview,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(select(models.WFHRequest).where(models.WFHRequest.id == id))
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="WFH request not found")
+    item.status = models.RequestStatusEnum.rejected
+    item.approver_id = current_user.id
+    item.approver_comment = data.approver_comment
+    await db.commit()
+    await db.refresh(item)
+    return item
+
+
+@router.delete("/wfh-requests/{id}", status_code=status.HTTP_200_OK, summary="Delete WFH Request")
+async def delete_wfh_request(
+    id: int,
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(select(models.WFHRequest).where(models.WFHRequest.id == id))
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="WFH request not found")
+    await db.delete(item)
+    await db.commit()
+    return {"detail": "WFH request deleted successfully"}
+
+
+# ═══════════════════════════════════════════════════════════
+# ATTENDANCE SUMMARY REPORT
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/summary", response_model=schemas.AttendanceSummaryOut, summary="Monthly Attendance Summary for an Employee")
+async def attendance_summary(
+    employee_id: Optional[int] = None,
+    month: int = Query(default=date.today().month, ge=1, le=12),
+    year: int = Query(default=date.today().year),
+    db: AsyncSession = Depends(get_tenant_db_from_token),
+    current_user: User = Depends(get_current_user)
+):
+    """Returns a summary of an employee's attendance for a given month/year."""
+    eid = employee_id or current_user.id
+
+    result = await db.execute(
+        select(models.AttendanceLog).where(
+            models.AttendanceLog.employee_id == eid,
+            models.AttendanceLog.date >= date(year, month, 1),
+        )
+    )
+    logs = result.scalars().all()
+
+    import calendar
+    total_days = calendar.monthrange(year, month)[1]
+
+    summary = {
+        "present": 0, "absent": 0, "late": 0,
+        "half_day": 0, "on_leave": 0, "holiday": 0,
+        "total_hours": 0.0
+    }
+
+    # Filter only this month
+    month_logs = [l for l in logs if l.date.month == month and l.date.year == year]
+
+    for log in month_logs:
+        s = log.status.value if log.status else "present"
+        if s == "present":
+            summary["present"] += 1
+        elif s == "absent":
+            summary["absent"] += 1
+        elif s == "late":
+            summary["late"] += 1
+        elif s == "half_day":
+            summary["half_day"] += 1
+        elif s == "on_leave":
+            summary["on_leave"] += 1
+        elif s == "holiday":
+            summary["holiday"] += 1
+        summary["total_hours"] += log.total_hours or 0.0
+
+    return schemas.AttendanceSummaryOut(
+        employee_id=eid,
+        month=month,
+        year=year,
+        total_days=total_days,
+        present_days=summary["present"],
+        absent_days=summary["absent"],
+        late_days=summary["late"],
+        half_days=summary["half_day"],
+        on_leave_days=summary["on_leave"],
+        holiday_days=summary["holiday"],
+        total_hours=round(summary["total_hours"], 2),
+    )
+

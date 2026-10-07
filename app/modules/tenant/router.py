@@ -17,14 +17,16 @@ import app.modules.pms.models  # noqa: F401
 import app.modules.recruitment.models  # noqa: F401
 import app.modules.helpdesk.models  # noqa: F401
 import app.modules.asset.models  # noqa: F401
+import app.modules.notifications.models  # noqa: F401
 from app.core.security import get_password_hash
+from app.core.dependencies import get_token_payload
 
 router = APIRouter()
 
 def sanitize_schema_name(name: str) -> str:
-    # Convert company name to a valid postgres schema name
     clean_name = re.sub(r'[^a-zA-Z0-9]', '_', name).lower()
     return f"tenant_{clean_name}"
+
 
 @router.post("/register", response_model=schemas.TenantResponse, status_code=status.HTTP_201_CREATED)
 async def register_company(data: schemas.CompanyRegister, db: AsyncSession = Depends(get_db)):
@@ -63,10 +65,55 @@ async def register_company(data: schemas.CompanyRegister, db: AsyncSession = Dep
             hashed_password=get_password_hash(data.admin_password),
             first_name=data.admin_first_name,
             last_name=data.admin_last_name,
-            is_superuser=True, # This is the main admin
+            is_superuser=True,
             is_active=True
         )
         tenant_session.add(admin_user)
         await tenant_session.commit()
 
     return new_tenant
+
+
+@router.get("/me", response_model=schemas.TenantResponse, summary="Get My Company Profile")
+async def get_my_tenant(
+    payload: dict = Depends(get_token_payload),
+    db: AsyncSession = Depends(get_db)
+):
+    """Returns the current tenant/company details."""
+    schema_name = payload.get("schema_name")
+    result = await db.execute(select(Tenant).where(Tenant.schema_name == schema_name))
+    tenant = result.scalars().first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return tenant
+
+
+@router.patch("/me", response_model=schemas.TenantResponse, summary="Update My Company Name")
+async def update_my_tenant(
+    data: schemas.TenantUpdate,
+    payload: dict = Depends(get_token_payload),
+    db: AsyncSession = Depends(get_db)
+):
+    """Allows a superuser to update the company name."""
+    schema_name = payload.get("schema_name")
+    result = await db.execute(select(Tenant).where(Tenant.schema_name == schema_name))
+    tenant = result.scalars().first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    if data.company_name:
+        # Check uniqueness
+        existing = await db.execute(
+            select(Tenant).where(Tenant.company_name == data.company_name, Tenant.id != tenant.id)
+        )
+        if existing.scalars().first():
+            raise HTTPException(status_code=400, detail="Company name already taken")
+        tenant.company_name = data.company_name
+
+    if data.is_active is not None:
+        tenant.is_active = data.is_active
+
+    await db.commit()
+    await db.refresh(tenant)
+    return tenant
+

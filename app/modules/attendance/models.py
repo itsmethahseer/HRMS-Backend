@@ -129,3 +129,43 @@ class OvertimeRequest(Base):
     # Relationships
     employee = relationship("User", foreign_keys=[employee_id])
     approver = relationship("User", foreign_keys=[approver_id])
+
+
+class ShiftAssignment(Base):
+    """Assigns a shift to a specific employee (overrides the default shift)."""
+    __tablename__ = "shift_assignments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    shift_id = Column(Integer, ForeignKey("shifts.id"), nullable=False)
+    effective_from = Column(Date, nullable=False)
+    effective_to = Column(Date, nullable=True)  # None = indefinite
+    is_active = Column(Boolean, default=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    employee = relationship("User", foreign_keys=[employee_id])
+    shift = relationship("Shift", foreign_keys=[shift_id])
+
+
+class WFHRequest(Base):
+    """Work-from-home request by an employee."""
+    __tablename__ = "wfh_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    date = Column(Date, nullable=False)
+    reason = Column(Text, nullable=False)
+
+    status = Column(SAEnum(RequestStatusEnum, name="wfhrequeststatusenum", create_type=False), default=RequestStatusEnum.pending)
+    approver_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    approver_comment = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationships
+    employee = relationship("User", foreign_keys=[employee_id])
+    approver = relationship("User", foreign_keys=[approver_id])
+
